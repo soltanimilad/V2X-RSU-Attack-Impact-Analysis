@@ -381,11 +381,53 @@ class SumoWorker(QThread):
         else:
             self.log("⚠️ Plotting skipped: No edges found in the route file.")
 
-
+        log_dir = f"{filename}-logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            self.log(f"✅ Created output directory: {log_dir}/")
         # --- Step 7: Configuration Files (Unchanged) ---
         self.log("--- Step 7: Writing Configuration Files ---")
         launchd = self.generate_launchd(filename)
         sumocfg = self.generate_sumocfg(filename, route_file)
+        self.log("ℹ️ Extracting coordinates from net.xml...")
+        try:
+            tree = ET.parse(net_file)
+            location_element = tree.find('.//location')
+            if location_element is not None:
+                conv_boundary_str = location_element.get('convBoundary')
+                min_x, min_y, max_x, max_y = map(float, conv_boundary_str.split(','))
+            else:
+                raise ValueError("Location tag not found in net.xml.")
+        except Exception as e:
+            self.log(f"❌ Error extracting coordinates: {e}")
+            return False, "", "", None
+        PERCENTAGE_INCREASE = 0.50  # 50% larger
+        
+        # Calculate original map dimensions
+        original_width = max_x - min_x
+        original_height = max_y - min_y
+
+        # Calculate the total buffer needed based on the percentage
+        # e.g., if original width is 1000m, buffer_x will be 500m
+        BUFFER_SIZE_X = original_width * PERCENTAGE_INCREASE
+        BUFFER_SIZE_Y = original_height * PERCENTAGE_INCREASE
+
+        # The amount the RSU must be shifted is half the buffer size
+        OFFSET_X = BUFFER_SIZE_X / 2.0  
+        OFFSET_Y = BUFFER_SIZE_Y / 2.0  
+        
+        # 1. Calculate the final playground size (Original Size + Total Buffer)
+        play_ground_x_final = original_width + BUFFER_SIZE_X
+        play_ground_y_final = original_height + BUFFER_SIZE_Y
+        
+        # 2. Calculate the RSU position (Original Relative Center + Offset)
+        # Original relative X: center_x - min_x
+        rsu_x_shifted = (original_width / 2.0) + OFFSET_X
+        # Original relative Y: max_y - center_y
+        rsu_y_shifted = (original_height / 2.0) + OFFSET_Y
+        
+        # Note: You must update the call to use the dynamically calculated buffers
+        ini = self.generate_omnetpp_ini(filename , play_ground_x_final , play_ground_y_final , rsu_x_shifted , rsu_y_shifted , self.end_time)
 
         # --- Step 8: Cleanup (Unchanged) ---
         self.log("--- Step 8: Cleaning up ---")
@@ -418,12 +460,150 @@ class SumoWorker(QThread):
         <begin value="0"/>
         <end value="{self.end_time}"/>
     </time>
+    <output>
+        <fcd-output value="{filename}.fcd.xml"/>
+        <summary-output value="{filename}.summary.xml"/>
+    </output>
 </configuration>"""
         name = f"{filename}.sumo.cfg"
         with open(name, 'w') as f: f.write(content)
         self.log(f"Created {name}")
         return name
+    def generate_omnetpp_ini(self, filename , pg_x, pg_y, rsu_x, rsu_y, end_time):
+        content = f"""[General]
+cmdenv-express-mode = true
+cmdenv-autoflush = true
+cmdenv-status-frequency = 1s
+**.cmdenv-log-level = info
 
+image-path = ../../images
+
+network = RSUExampleScenario
+
+##########################################################
+#            Simulation parameters                       #
+##########################################################
+debug-on-errors = true
+print-undisposed = true
+
+sim-time-limit = {end_time}s
+
+**.scalar-recording = true
+**.vector-recording = true
+
+*.playgroundSizeX = {pg_x}m
+*.playgroundSizeY = {pg_y}m
+*.playgroundSizeZ = 50m
+
+
+##########################################################
+# Annotation parameters                                  #
+##########################################################
+*.annotations.draw = true
+
+##########################################################
+# Obstacle parameters                                    #
+##########################################################
+*.obstacles.obstacles = xmldoc("config.xml", "//AnalogueModel[@type='SimpleObstacleShadowing']/obstacles")
+
+##########################################################
+#            TraCIScenarioManager parameters             #
+##########################################################
+*.manager.updateInterval = 1s
+*.manager.host = "localhost"
+*.manager.port = 9999
+*.manager.autoShutdown = true
+*.manager.launchConfig = xmldoc("{filename}.launchd.xml")
+*.manager.trafficLightModuleType = "org.car2x.veins.nodes.TrafficLight"
+
+*.tls[*].mobility.x = 0
+*.tls[*].mobility.y = 0
+*.tls[*].mobility.z = 3
+
+*.tls[*].applType = "org.car2x.veins.modules.application.traci.TraCIDemoTrafficLightApp"
+*.tls[*].logicType ="org.car2x.veins.modules.world.traci.trafficLight.logics.TraCITrafficLightSimpleLogic"
+
+
+##########################################################
+#                       RSU SETTINGS                     #
+#                                                        #
+#                                                        #
+##########################################################
+*.rsu[0].mobility.x = {rsu_x}
+*.rsu[0].mobility.y = {rsu_y}
+*.rsu[0].mobility.z = 3
+
+*.rsu[*].applType = "TraCIDemoRSU11p"
+*.rsu[*].appl.headerLength = 80 bit
+*.rsu[*].appl.sendBeacons = false
+*.rsu[*].appl.dataOnSch = false
+*.rsu[*].appl.beaconInterval = 1s
+*.rsu[*].appl.beaconUserPriority = 7
+*.rsu[*].appl.dataUserPriority = 5
+*.rsu[*].nic.phy80211p.antennaOffsetZ = 0 m
+
+##########################################################
+#            11p specific parameters                     #
+#                                                        #
+#                    NIC-Settings                        #
+##########################################################
+*.connectionManager.sendDirect = true
+*.connectionManager.maxInterfDist = 2600m
+*.connectionManager.drawMaxIntfDist = false
+
+*.**.nic.mac1609_4.useServiceChannel = false
+
+*.**.nic.mac1609_4.txPower = 20mW
+*.**.nic.mac1609_4.bitrate = 6Mbps
+*.**.nic.phy80211p.minPowerLevel = -110dBm
+
+*.**.nic.phy80211p.useNoiseFloor = true
+*.**.nic.phy80211p.noiseFloor = -98dBm
+
+*.**.nic.phy80211p.decider = xmldoc("config.xml")
+*.**.nic.phy80211p.analogueModels = xmldoc("config.xml")
+*.**.nic.phy80211p.usePropagationDelay = true
+
+*.**.nic.phy80211p.antenna = xmldoc("antenna.xml", "/root/Antenna[@id='monopole']")
+*.node[*].nic.phy80211p.antennaOffsetY = 0 m
+*.node[*].nic.phy80211p.antennaOffsetZ = 1.895 m
+
+##########################################################
+#                      App Layer                         #
+##########################################################
+*.node[*].applType = "TraCIDemo11p"
+*.node[*].appl.headerLength = 80 bit
+*.node[*].appl.sendBeacons = false
+*.node[*].appl.dataOnSch = false
+*.node[*].appl.beaconInterval = 1s
+
+##########################################################
+#                      Mobility                          #
+##########################################################
+*.node[*].veinsmobility.x = 0
+*.node[*].veinsmobility.y = 0
+*.node[*].veinsmobility.z = 0
+*.node[*].veinsmobility.setHostSpeed = false
+*.node[*0].veinsmobility.accidentCount = 1
+*.node[*0].veinsmobility.accidentStart = 73s
+*.node[*0].veinsmobility.accidentDuration = 50s
+
+[Config Default]
+
+[Config WithBeaconing]
+*.rsu[*].appl.sendBeacons = true
+*.node[*].appl.sendBeacons = true
+
+[Config WithChannelSwitching]
+*.**.nic.mac1609_4.useServiceChannel = true
+*.node[*].appl.dataOnSch = true
+*.rsu[*].appl.dataOnSch = true
+
+"""
+        name = f"{filename}.omnetpp.ini"
+        with open(name, 'w') as f: f.write(content)
+        self.log(f"Created {name}")
+        return name  
     def cleanup(self, filename):
         files = ["routes.rou.xml", f"{filename}.rou.alt.xml", f"{filename}.trip.xml"]
         for f in files:
@@ -449,7 +629,7 @@ class SumoApp(QMainWindow):
         
         self.filename_edit = QLineEdit("VeinsScenario")
         self.time_spin = QSpinBox(); self.time_spin.setRange(100, 100000); self.time_spin.setValue(3600)
-        self.trips_spin = QSpinBox(); self.trips_spin.setRange(1, 100000); self.trips_spin.setValue(1000000)
+        self.trips_spin = QSpinBox(); self.trips_spin.setRange(1, 100000); self.trips_spin.setValue(10000)
         
         controls_layout.addWidget(QLabel("Filename:"))
         controls_layout.addWidget(self.filename_edit)
