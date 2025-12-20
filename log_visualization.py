@@ -2,7 +2,6 @@ import sys
 import os
 import xml.etree.ElementTree as ET
 import numpy as np
-import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QTabWidget, QPushButton, QLineEdit, 
@@ -105,7 +104,7 @@ class AnalysisWorker(QThread):
 
             figs = {}
 
-            # 1. Congestion (Summary)
+            # 1. Congestion
             f1 = Figure(); ax = f1.add_subplot(111)
             ax.plot(cs.time, cs.running_vehicles, label="Clean", color='blue')
             ax.plot(bs.time, bs.running_vehicles, label="Blocked", color='red')
@@ -123,7 +122,7 @@ class AnalysisWorker(QThread):
             ax.scatter(bt.depart, bt.time_loss, color='red', s=8, alpha=0.4, label="Blocked")
             ax.set_title("Impact Timing (Departure vs Delay)"); ax.set_xlabel("Departure Time (s)"); ax.set_ylabel("Time Loss (s)"); ax.legend(); figs['scatter'] = f3
 
-            # 4. Route Truncation (Boxplot)
+            # 4. Route Truncation
             f4 = Figure(); ax = f4.add_subplot(111)
             ax.boxplot([ct.route_length, bt.route_length], labels=['Clean', 'Blocked'])
             ax.set_title("Route Length Comparison"); ax.set_ylabel("Distance (m)"); figs['length'] = f4
@@ -138,44 +137,36 @@ class AnalysisWorker(QThread):
             ax.bar(x + 0.2, b_vals, 0.4, label='Blocked', color='salmon')
             ax.set_xticks(x); ax.set_xticklabels(metrics); ax.set_title("Average Impact per Vehicle"); ax.legend(); figs['bars'] = f5
 
-            # RESTORED DETAILED REPORT
-            # Calculate Differences
-            # Calculate Averages and Mean Speed
+            # 6. NEW: Mean Speed Comparison Chart
+            f6 = Figure(); ax = f6.add_subplot(111)
+            ax.plot(cs.time, cs.mean_speed, label="Clean", color='blue', alpha=0.7)
+            ax.plot(bs.time, bs.mean_speed, label="Blocked", color='red', alpha=0.7)
+            ax.set_title("Network Mean Speed Over Time"); ax.set_xlabel("Time (s)"); ax.set_ylabel("Speed (m/s)"); ax.legend(); figs['speed'] = f6
+
+            # Detailed Report
             clean_mean_speed = np.mean(cs.mean_speed)
             blocked_mean_speed = np.mean(bs.mean_speed)
-            speed_reduction = clean_mean_speed - blocked_mean_speed
-            speed_reduction_pct = (speed_reduction / clean_mean_speed) * 100 if clean_mean_speed > 0 else 0
-
             report = (f"RESEARCH SUMMARY: {b}\n" + "="*45 +
                      f"\n[VEHICLE STATS]"
                      f"\nTotal Vehicles (Clean):      {ct.count}"
                      f"\nTotal Vehicles (Blocked):    {bt.count}"
                      f"\nVehicles Rerouted (Clean):   {ct.reroutes} ({ct.reroutes/ct.count*100:.1f}%)"
                      f"\nVehicles Rerouted (Blocked): {bt.reroutes} ({bt.reroutes/bt.count*100:.1f}%)"
-                     
                      f"\n\n[SPEED & THROUGHPUT]"
                      f"\nAvg Mean Speed (Clean):      {clean_mean_speed:.2f} m/s"
                      f"\nAvg Mean Speed (Blocked):    {blocked_mean_speed:.2f} m/s"
-                     f"\nSPEED REDUCTION:             -{speed_reduction:.2f} m/s ({speed_reduction_pct:.1f}%)"
-                     
+                     f"\nSPEED REDUCTION:             -{clean_mean_speed - blocked_mean_speed:.2f} m/s"
                      f"\n\n[TIME LOSS ANALYSIS]"
                      f"\nAvg Time Loss (Clean):       {np.mean(ct.time_loss):.1f}s"
                      f"\nAvg Time Loss (Blocked):     {np.mean(bt.time_loss):.1f}s"
                      f"\nATTACK IMPACT (Added Delay): +{np.mean(bt.time_loss) - np.mean(ct.time_loss):.2f}s"
-                     
                      f"\n\n[EXTREME VALUES & VARIANCE]"
                      f"\nMax Time Loss (Clean):       {np.max(ct.time_loss):.1f}s"
                      f"\nMax Time Loss (Blocked):     {np.max(bt.time_loss):.1f}s"
-                     f"\nStd Dev Time Loss (Clean):   {np.std(ct.time_loss):.2f}"
                      f"\nStd Dev Time Loss (Blocked): {np.std(bt.time_loss):.2f}"
-                     
                      f"\n\n[WAITING TIME]"
                      f"\nAvg Waiting (Clean):         {np.mean(ct.waiting_time):.1f}s"
-                     f"\nAvg Waiting (Blocked):       {np.mean(bt.waiting_time):.1f}s"
-                     
-                     f"\n\n[ROUTE ANALYSIS]"
-                     f"\nAvg Route Length (Clean):    {np.mean(ct.route_length):.1f}m"
-                     f"\nAvg Route Length (Blocked):  {np.mean(bt.route_length):.1f}m")
+                     f"\nAvg Waiting (Blocked):       {np.mean(bt.waiting_time):.1f}s")
 
             self.finished_signal.emit(True, figs, report)
         except Exception as e:
@@ -193,9 +184,8 @@ class AdvancedVisApp(QMainWindow):
         main_layout = QVBoxLayout(container)
 
         controls = QHBoxLayout()
-        self.base_in = QLineEdit("VeinsScenario")
+        self.base_in = QLineEdit("Baharan")
         self.path_in = QLineEdit(os.getcwd())
-        
         self.btn_browse = QPushButton("Select Parent Folder")
         self.btn = QPushButton("Run Analysis")
         self.btn_save = QPushButton("Export All PNGs")
@@ -205,9 +195,9 @@ class AdvancedVisApp(QMainWindow):
         self.btn.clicked.connect(self.run_analysis)
         self.btn_save.clicked.connect(self.save_all)
         
-        controls.addWidget(QLabel("Scenario Name:")); controls.addWidget(self.base_in)
+        controls.addWidget(QLabel("Scenario:")); controls.addWidget(self.base_in)
         controls.addWidget(self.btn_browse)
-        controls.addWidget(QLabel("Search Path:")); controls.addWidget(self.path_in)
+        controls.addWidget(QLabel("Path:")); controls.addWidget(self.path_in)
         controls.addWidget(self.btn); controls.addWidget(self.btn_save)
         main_layout.addLayout(controls)
 
@@ -215,7 +205,8 @@ class AdvancedVisApp(QMainWindow):
         self.log_view = QTextEdit()
         self.tab_congest = PlotViewer(); self.tab_dist = PlotViewer()
         self.tab_scatter = PlotViewer(); self.tab_length = PlotViewer()
-        self.tab_bars = PlotViewer(); self.report_view = QTextEdit()
+        self.tab_bars = PlotViewer(); self.tab_speed = PlotViewer()
+        self.report_view = QTextEdit()
         self.report_view.setFontPointSize(11)
 
         self.tabs.addTab(self.log_view, "Status Log")
@@ -224,7 +215,8 @@ class AdvancedVisApp(QMainWindow):
         self.tabs.addTab(self.tab_scatter, "3. Attack Timing")
         self.tabs.addTab(self.tab_length, "4. Route Lengths")
         self.tabs.addTab(self.tab_bars, "5. Averages")
-        self.tabs.addTab(self.report_view, "6. Final Report")
+        self.tabs.addTab(self.tab_speed, "6. Mean Speed") # NEW TAB
+        self.tabs.addTab(self.report_view, "7. Final Report")
         main_layout.addWidget(self.tabs)
 
     def browse_folder(self):
@@ -234,8 +226,7 @@ class AdvancedVisApp(QMainWindow):
     def run_analysis(self):
         self.log_view.clear()
         scenario = self.base_in.text()
-        parent = self.path_in.text()
-        target_logs = os.path.join(parent, f"{scenario}-logs")
+        target_logs = os.path.join(self.path_in.text(), f"{scenario}-logs")
         
         if not os.path.exists(target_logs):
             QMessageBox.warning(self, "Path Error", f"Folder not found:\n{target_logs}")
@@ -254,6 +245,7 @@ class AdvancedVisApp(QMainWindow):
             self.tab_scatter.set_plot(figs['scatter'])
             self.tab_length.set_plot(figs['length'])
             self.tab_bars.set_plot(figs['bars'])
+            self.tab_speed.set_plot(figs['speed']) # NEW UPDATE
             self.report_view.setText(report)
             self.btn_save.setEnabled(True)
             self.tabs.setCurrentIndex(6)
