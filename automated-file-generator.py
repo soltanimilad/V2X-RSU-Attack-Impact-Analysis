@@ -146,6 +146,8 @@ class SumoWorker(QThread):
         self.end_time = config['end_time']
         self.num_trips = config['num_trips']
         self.sumo_home = ""
+        self.attack_start = config.get('attack_start', 100)
+        self.attack_duration = config.get('attack_duration', 500)
 
     def run(self):
         self.log_signal.emit("--- Starting SUMO Generation Process ---")
@@ -157,12 +159,14 @@ class SumoWorker(QThread):
 
         plot_figure = None
         try:
-            success, launch, cfg, plot_figure = self.create_files() 
+            success, launch_clean , launch_blocked, cfg_clean , plot_figure , cfg_blocked = self.create_files() 
             
             if success:
                 self.log_signal.emit("\n✨ PROCESS COMPLETE ✨")
-                self.log_signal.emit(f"Veins Launch File: {launch}")
-                self.log_signal.emit(f"SUMO Config File: {cfg}")
+                self.log_signal.emit(f"Veins Clean Launch File: {launch_clean}")
+                self.log_signal.emit(f"Veins Blocked Launch File: {launch_blocked}")
+                self.log_signal.emit(f"Clean SUMO Config File: {cfg_clean}")
+                self.log_signal.emit(f"Blocked SUMO Config File: {cfg_blocked}")
                 self.finished_signal.emit(True, plot_figure) 
             else:
                 self.finished_signal.emit(False, None)
@@ -221,7 +225,152 @@ class SumoWorker(QThread):
         except Exception as e:
             self.log(f"❌ Error executing {description}: {e}")
             return False
-            
+    def cleanup(self, filename):
+        files = ["routes.rou.xml", f"{filename}.rou.alt.xml", f"{filename}.trip.xml"]
+        for f in files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                    self.log(f"Removed temp file: {f}")
+                except: pass 
+    def generate_Blocked_omnetini_File(self, filename , pg_x, pg_y, rsu_x, rsu_y, end_time ,target_edge: str , type : str):
+        content = f"""[General]
+cmdenv-express-mode = true
+cmdenv-autoflush = true
+cmdenv-status-frequency = 1s
+**.cmdenv-log-level = info
+
+image-path = ../../images
+
+network = RSUExampleScenario
+
+##########################################################
+#            Simulation parameters                       #
+##########################################################
+debug-on-errors = true
+print-undisposed = true
+
+sim-time-limit = {end_time}s
+
+**.scalar-recording = true
+**.vector-recording = true
+
+*.playgroundSizeX = {pg_x}m
+*.playgroundSizeY = {pg_y}m
+*.playgroundSizeZ = 50m
+
+
+##########################################################
+# Annotation parameters                                  #
+##########################################################
+*.annotations.draw = true
+
+##########################################################
+# Obstacle parameters                                    #
+##########################################################
+*.obstacles.obstacles = xmldoc("config.xml", "//AnalogueModel[@type='SimpleObstacleShadowing']/obstacles")
+
+##########################################################
+#            TraCIScenarioManager parameters             #
+##########################################################
+*.manager.updateInterval = 1s
+*.manager.host = "localhost"
+*.manager.port = 9999
+*.manager.autoShutdown = true
+*.manager.launchConfig = xmldoc("{filename}_{type}.launchd.xml")
+*.manager.trafficLightModuleType = "org.car2x.veins.nodes.TrafficLight"
+
+*.tls[*].mobility.x = 0
+*.tls[*].mobility.y = 0
+*.tls[*].mobility.z = 3
+
+*.tls[*].applType = "org.car2x.veins.modules.application.traci.TraCIDemoTrafficLightApp"
+*.tls[*].logicType ="org.car2x.veins.modules.world.traci.trafficLight.logics.TraCITrafficLightSimpleLogic"
+
+
+##########################################################
+#                       RSU SETTINGS                     #
+#                                                        #
+#                                                        #
+##########################################################
+*.rsu[0].mobility.x = {rsu_x}
+*.rsu[0].mobility.y = {rsu_y}
+*.rsu[0].mobility.z = 3
+
+*.rsu[*].applType = "TraCIDemoRSU11p"
+*.rsu[*].appl.attackLaneId     = "{target_edge}_0"
+*.rsu[*].appl.attackStartTime  = {self.attack_start}s      
+*.rsu[*].appl.attackDuration   = {self.attack_duration}s      
+*.rsu[*].appl.headerLength = 80 bit
+*.rsu[*].appl.sendBeacons = false
+*.rsu[*].appl.dataOnSch = false
+*.rsu[*].appl.beaconInterval = 1s
+*.rsu[*].appl.beaconUserPriority = 7
+*.rsu[*].appl.dataUserPriority = 5
+*.rsu[*].nic.phy80211p.antennaOffsetZ = 0 m
+
+##########################################################
+#            11p specific parameters                     #
+#                                                        #
+#                    NIC-Settings                        #
+##########################################################
+*.connectionManager.sendDirect = true
+*.connectionManager.maxInterfDist = 2600m
+*.connectionManager.drawMaxIntfDist = false
+
+*.**.nic.mac1609_4.useServiceChannel = false
+
+*.**.nic.mac1609_4.txPower = 20mW
+*.**.nic.mac1609_4.bitrate = 6Mbps
+*.**.nic.phy80211p.minPowerLevel = -110dBm
+
+*.**.nic.phy80211p.useNoiseFloor = true
+*.**.nic.phy80211p.noiseFloor = -98dBm
+
+*.**.nic.phy80211p.decider = xmldoc("config.xml")
+*.**.nic.phy80211p.analogueModels = xmldoc("config.xml")
+*.**.nic.phy80211p.usePropagationDelay = true
+
+*.**.nic.phy80211p.antenna = xmldoc("antenna.xml", "/root/Antenna[@id='monopole']")
+*.node[*].nic.phy80211p.antennaOffsetY = 0 m
+*.node[*].nic.phy80211p.antennaOffsetZ = 1.895 m
+
+##########################################################
+#                      App Layer                         #
+##########################################################
+*.node[*].applType = "TraCIDemo11p"
+*.node[*].appl.headerLength = 80 bit
+*.node[*].appl.sendBeacons = false
+*.node[*].appl.dataOnSch = false
+*.node[*].appl.beaconInterval = 1s
+
+##########################################################
+#                      Mobility                          #
+##########################################################
+*.node[*].veinsmobility.x = 0
+*.node[*].veinsmobility.y = 0
+*.node[*].veinsmobility.z = 0
+*.node[*].veinsmobility.setHostSpeed = false
+*.node[*0].veinsmobility.accidentCount = 1
+*.node[*0].veinsmobility.accidentStart = 73s
+*.node[*0].veinsmobility.accidentDuration = 50s
+
+[Config Default]
+
+[Config WithBeaconing]
+*.rsu[*].appl.sendBeacons = true
+*.node[*].appl.sendBeacons = true
+
+[Config WithChannelSwitching]
+*.**.nic.mac1609_4.useServiceChannel = true
+*.node[*].appl.dataOnSch = true
+*.rsu[*].appl.dataOnSch = true
+
+"""
+        name = f"{filename}_Blocked.omnetpp.ini"
+        with open(name, 'w') as f: f.write(content)
+        self.log(f"Created {name}")
+        return name         
     def most_used_route_finder(self, route_file: str, top_n: int = 10) -> List[Tuple[str, int]]:
         if not os.path.exists(route_file):
             self.log(f"⚠️ Cannot analyze routes: File not found at {route_file}")
@@ -260,8 +409,7 @@ class SumoWorker(QThread):
         
         for edge_id, count in most_common_edges:
             percentage = (count / total_edges) * 100 if total_edges > 0 else 0
-            self.log(f"* **{edge_id}**: {count:,} times ({percentage:.2f}%)")
-            
+            self.log(f"* **{edge_id}**: {count:,} times ({percentage:.2f}%)") 
         return most_common_edges
         
     def create_files(self) -> Tuple[bool, str, str, Optional[Figure]]:
@@ -326,14 +474,17 @@ class SumoWorker(QThread):
         # --- Step 2: Netconvert (Unchanged) ---
         self.log("--- Step 2: Converting to Network (Netconvert) ---")
         net_cmd = [
-            "netconvert", 
-            "--osm-files", osm_file, 
-            "-o", net_file,
-            "--junctions.join", 
-            "--tls.guess-signals", 
-            "--tls.discard-simple", 
-            "--tls.join"
-        ]
+    "netconvert", 
+    "--osm-files", osm_file, 
+    "-o", net_file,
+    "--junctions.join",              # Joins nearby nodes into single intersections
+    "--no-internal-links", "false",  # Crucial: enables physical turns for blocking
+    "--keep-edges.components", "1",  # Deletes disconnected "island" roads
+    "--tls.discard-simple",          # Removes unnecessary traffic lights
+    "--tls.join",                    # Groups traffic lights at large junctions
+    "--geometry.remove",             # Simplifies road shapes for better performance
+    "--roundabouts.guess"            # Identifies roundabouts for better routing
+]
         if not self.run_command(net_cmd, "Netconvert"): return False, "", "", None
 
         # --- Step 3: Polyconvert (Unchanged) ---
@@ -380,15 +531,12 @@ class SumoWorker(QThread):
             self.log("📊 Graphical Report Figure created successfully.")
         else:
             self.log("⚠️ Plotting skipped: No edges found in the route file.")
-
-        log_dir = f"{filename}-logs"
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-            self.log(f"✅ Created output directory: {log_dir}/")
         # --- Step 7: Configuration Files (Unchanged) ---
         self.log("--- Step 7: Writing Configuration Files ---")
-        launchd = self.generate_launchd(filename)
-        sumocfg = self.generate_sumocfg(filename, route_file)
+        launchd_clean = self.generate_launchd(filename , "Clean")
+        launched_blocked = self.generate_launchd(filename , "Blocked")
+        sumocfg_clean = self.generate_sumocfg(filename, route_file , "Clean")
+        sumocfg_blocked = self.generate_sumocfg(filename, route_file , "Blocked")
         self.log("ℹ️ Extracting coordinates from net.xml...")
         try:
             tree = ET.parse(net_file)
@@ -427,29 +575,39 @@ class SumoWorker(QThread):
         rsu_y_shifted = (original_height / 2.0) + OFFSET_Y
         
         # Note: You must update the call to use the dynamically calculated buffers
-        ini = self.generate_omnetpp_ini(filename , play_ground_x_final , play_ground_y_final , rsu_x_shifted , rsu_y_shifted , self.end_time)
+        clean_ini = self.generate_omnetpp_ini(filename , play_ground_x_final , play_ground_y_final , rsu_x_shifted , rsu_y_shifted , self.end_time , "Clean")
+        
+        target_edge = top_edges_list[0][0]
+        blocked_ini = self.generate_Blocked_omnetini_File(filename , play_ground_x_final , play_ground_y_final , rsu_x_shifted , rsu_y_shifted , self.end_time , target_edge , "Blocked")
 
         # --- Step 8: Cleanup (Unchanged) ---
         self.log("--- Step 8: Cleaning up ---")
         self.cleanup(filename)
 
-        return True, launchd, sumocfg, plot_figure
+        return True, launchd_clean, launched_blocked , sumocfg_clean, plot_figure , sumocfg_blocked 
 
     # --- Configuration Generating Functions (Unchanged) ---
-    def generate_launchd(self, filename):
+    def generate_launchd(self, filename , type : str):
         content = f"""<?xml version="1.0"?>
 <launch>
     <copy file="{filename}.net.xml" />
     <copy file="{filename}.rou.xml" />
     <copy file="{filename}.poly.xml" />
-    <copy file="{filename}.sumo.cfg" type="config" />
+    <copy file="{filename}_{type}.sumo.cfg" type="config" />
 </launch>"""
-        name = f"{filename}.launchd.xml"
+        name = f"{filename}_{type}.launchd.xml"
         with open(name, 'w') as f: f.write(content)
         self.log(f"Created {name}")
         return name
 
-    def generate_sumocfg(self, filename, route_file):
+    def generate_sumocfg(self, filename, route_file , type : str):
+        log_dir = f"{filename}-logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            self.log(f"✅ Created output directory: {log_dir}/")
+        os.makedirs(os.getcwd() , exist_ok=True)
+        summary_output = os.path.join(os.getcwd(), f"{log_dir}/{filename}_{type}_summary_output.xml")
+        tripinfo_output = os.path.join(os.getcwd(), f"{log_dir}/{filename}_{type}_tripinfo_output.xml")
         content = f"""<configuration>
     <input>
         <net-file value="{filename}.net.xml"/>
@@ -460,16 +618,21 @@ class SumoWorker(QThread):
         <begin value="0"/>
         <end value="{self.end_time}"/>
     </time>
+    <processing>
+        <ignore-route-errors value="true"/>
+        <waiting-time-memory value="{self.end_time}"/>
+        <time-to-teleport value="-1"/> 
+        </processing>
     <output>
-        <fcd-output value="{filename}.fcd.xml"/>
-        <summary-output value="{filename}.summary.xml"/>
+        <summary-output value="{summary_output}"/>
+        <tripinfo-output value="{tripinfo_output}"/>
     </output>
 </configuration>"""
-        name = f"{filename}.sumo.cfg"
+        name = f"{filename}_{type}.sumo.cfg"
         with open(name, 'w') as f: f.write(content)
         self.log(f"Created {name}")
         return name
-    def generate_omnetpp_ini(self, filename , pg_x, pg_y, rsu_x, rsu_y, end_time):
+    def generate_omnetpp_ini(self, filename , pg_x, pg_y, rsu_x, rsu_y, end_time , type : str):
         content = f"""[General]
 cmdenv-express-mode = true
 cmdenv-autoflush = true
@@ -513,7 +676,7 @@ sim-time-limit = {end_time}s
 *.manager.host = "localhost"
 *.manager.port = 9999
 *.manager.autoShutdown = true
-*.manager.launchConfig = xmldoc("{filename}.launchd.xml")
+*.manager.launchConfig = xmldoc("{filename}_{type}.launchd.xml")
 *.manager.trafficLightModuleType = "org.car2x.veins.nodes.TrafficLight"
 
 *.tls[*].mobility.x = 0
@@ -600,7 +763,7 @@ sim-time-limit = {end_time}s
 *.rsu[*].appl.dataOnSch = true
 
 """
-        name = f"{filename}.omnetpp.ini"
+        name = f"{filename}_Clean.omnetpp.ini"
         with open(name, 'w') as f: f.write(content)
         self.log(f"Created {name}")
         return name  
@@ -630,6 +793,22 @@ class SumoApp(QMainWindow):
         self.filename_edit = QLineEdit("VeinsScenario")
         self.time_spin = QSpinBox(); self.time_spin.setRange(100, 100000); self.time_spin.setValue(3600)
         self.trips_spin = QSpinBox(); self.trips_spin.setRange(1, 100000); self.trips_spin.setValue(10000)
+        # --- ADD THIS IN SumoApp.__init__ ---
+        self.attack_start_spin = QSpinBox()
+        self.attack_start_spin.setRange(0, 100000)
+        self.attack_start_spin.setValue(100)
+        self.attack_start_spin.setSuffix("s")
+
+        self.attack_duration_spin = QSpinBox()
+        self.attack_duration_spin.setRange(0, 100000)
+        self.attack_duration_spin.setValue(500)
+        self.attack_duration_spin.setSuffix("s")
+
+        # Add them to the layout so they appear on screen
+        controls_layout.addWidget(QLabel("Attack Start:"))
+        controls_layout.addWidget(self.attack_start_spin)
+        controls_layout.addWidget(QLabel("Duration:"))
+        controls_layout.addWidget(self.attack_duration_spin)
         
         controls_layout.addWidget(QLabel("Filename:"))
         controls_layout.addWidget(self.filename_edit)
@@ -702,7 +881,9 @@ class SumoApp(QMainWindow):
             'filename': filename,
             'bbox': bounds,
             'end_time': self.time_spin.value(),
-            'num_trips': self.trips_spin.value()
+            'num_trips': self.trips_spin.value() , 
+            'attack_start': self.attack_start_spin.value(),    
+            'attack_duration': self.attack_duration_spin.value()
         }
 
         # Switch to Log Tab
