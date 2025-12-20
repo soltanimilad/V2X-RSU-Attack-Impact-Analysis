@@ -184,7 +184,7 @@ class AdvancedVisApp(QMainWindow):
         main_layout = QVBoxLayout(container)
 
         controls = QHBoxLayout()
-        self.base_in = QLineEdit("Baharan")
+        self.base_in = QLineEdit("VeinsScenrio")
         self.path_in = QLineEdit(os.getcwd())
         self.btn_browse = QPushButton("Select Parent Folder")
         self.btn = QPushButton("Run Analysis")
