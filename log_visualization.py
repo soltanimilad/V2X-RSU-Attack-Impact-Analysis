@@ -99,7 +99,7 @@ class AnalysisWorker(QThread):
                 'b_s': os.path.join(f, f"{b}_Blocked_summary_output.xml")
             }
 
-            self.log_signal.emit("📊 Parsing simulation logs...")
+            self.log_signal.emit(f"📊 Analyzing files for scenario: {b}")
             ct, bt = self.parse_trip(paths['c_t'], "Clean"), self.parse_trip(paths['b_t'], "Blocked")
             cs, bs = self.parse_sum(paths['c_s'], "Clean"), self.parse_sum(paths['b_s'], "Blocked")
 
@@ -111,12 +111,11 @@ class AnalysisWorker(QThread):
             ax.plot(bs.time, bs.running_vehicles, label="Blocked", color='red')
             ax.set_title("Network Congestion (Active Vehicles)"); ax.set_xlabel("Time (s)"); ax.legend(); figs['congestion'] = f1
 
-            # 2. Time Loss Distribution (New Histogram Tab)
+            # 2. Time Loss Distribution
             f2 = Figure(); ax = f2.add_subplot(111)
-            # Overlay histograms to see the shift in delay
             ax.hist(ct.time_loss, bins=30, alpha=0.5, label='Clean', color='blue', density=True)
             ax.hist(bt.time_loss, bins=30, alpha=0.5, label='Blocked', color='red', density=True)
-            ax.set_title("Time Loss Probability Density"); ax.set_xlabel("Seconds Lost"); ax.set_ylabel("Frequency"); ax.legend(); figs['distribution'] = f2
+            ax.set_title("Time Loss Probability Density"); ax.set_xlabel("Seconds Lost"); ax.legend(); figs['distribution'] = f2
 
             # 3. Time Loss Scatter
             f3 = Figure(); ax = f3.add_subplot(111)
@@ -127,7 +126,7 @@ class AnalysisWorker(QThread):
             # 4. Route Truncation (Boxplot)
             f4 = Figure(); ax = f4.add_subplot(111)
             ax.boxplot([ct.route_length, bt.route_length], labels=['Clean', 'Blocked'])
-            ax.set_title("Route Length Comparison (Checking for Short-Cuts)"); ax.set_ylabel("Distance (m)"); figs['length'] = f4
+            ax.set_title("Route Length Comparison"); ax.set_ylabel("Distance (m)"); figs['length'] = f4
 
             # 5. Delay Averages
             f5 = Figure(); ax = f5.add_subplot(111)
@@ -139,20 +138,44 @@ class AnalysisWorker(QThread):
             ax.bar(x + 0.2, b_vals, 0.4, label='Blocked', color='salmon')
             ax.set_xticks(x); ax.set_xticklabels(metrics); ax.set_title("Average Impact per Vehicle"); ax.legend(); figs['bars'] = f5
 
-            # Detailed Report with Max/StdDev to explain the "Lower Average" paradox
-            report = (f"RESEARCH SUMMARY: {b}\n" + "="*35 +
+            # RESTORED DETAILED REPORT
+            # Calculate Differences
+            # Calculate Averages and Mean Speed
+            clean_mean_speed = np.mean(cs.mean_speed)
+            blocked_mean_speed = np.mean(bs.mean_speed)
+            speed_reduction = clean_mean_speed - blocked_mean_speed
+            speed_reduction_pct = (speed_reduction / clean_mean_speed) * 100 if clean_mean_speed > 0 else 0
+
+            report = (f"RESEARCH SUMMARY: {b}\n" + "="*45 +
                      f"\n[VEHICLE STATS]"
-                     f"\nTotal Vehicles Finished: {bt.count}"
-                     f"\nVehicles Rerouted: {bt.reroutes} ({bt.reroutes/bt.count*100:.1f}%)"
+                     f"\nTotal Vehicles (Clean):      {ct.count}"
+                     f"\nTotal Vehicles (Blocked):    {bt.count}"
+                     f"\nVehicles Rerouted (Clean):   {ct.reroutes} ({ct.reroutes/ct.count*100:.1f}%)"
+                     f"\nVehicles Rerouted (Blocked): {bt.reroutes} ({bt.reroutes/bt.count*100:.1f}%)"
+                     
+                     f"\n\n[SPEED & THROUGHPUT]"
+                     f"\nAvg Mean Speed (Clean):      {clean_mean_speed:.2f} m/s"
+                     f"\nAvg Mean Speed (Blocked):    {blocked_mean_speed:.2f} m/s"
+                     f"\nSPEED REDUCTION:             -{speed_reduction:.2f} m/s ({speed_reduction_pct:.1f}%)"
+                     
                      f"\n\n[TIME LOSS ANALYSIS]"
-                     f"\nMax Time Loss (Clean):   {np.max(ct.time_loss):.1f}s"
-                     f"\nMax Time Loss (Blocked): {np.max(bt.time_loss):.1f}s  <-- (Peak Damage)"
-                     f"\nAvg Time Loss (Clean):   {np.mean(ct.time_loss):.1f}s"
-                     f"\nAvg Time Loss (Blocked): {np.mean(bt.time_loss):.1f}s"
-                     f"\nStd Dev (Blocked):      {np.std(bt.time_loss):.2f}"
+                     f"\nAvg Time Loss (Clean):       {np.mean(ct.time_loss):.1f}s"
+                     f"\nAvg Time Loss (Blocked):     {np.mean(bt.time_loss):.1f}s"
+                     f"\nATTACK IMPACT (Added Delay): +{np.mean(bt.time_loss) - np.mean(ct.time_loss):.2f}s"
+                     
+                     f"\n\n[EXTREME VALUES & VARIANCE]"
+                     f"\nMax Time Loss (Clean):       {np.max(ct.time_loss):.1f}s"
+                     f"\nMax Time Loss (Blocked):     {np.max(bt.time_loss):.1f}s"
+                     f"\nStd Dev Time Loss (Clean):   {np.std(ct.time_loss):.2f}"
+                     f"\nStd Dev Time Loss (Blocked): {np.std(bt.time_loss):.2f}"
+                     
+                     f"\n\n[WAITING TIME]"
+                     f"\nAvg Waiting (Clean):         {np.mean(ct.waiting_time):.1f}s"
+                     f"\nAvg Waiting (Blocked):       {np.mean(bt.waiting_time):.1f}s"
+                     
                      f"\n\n[ROUTE ANALYSIS]"
-                     f"\nAvg Route Length (Clean):   {np.mean(ct.route_length):.1f}m"
-                     f"\nAvg Route Length (Blocked): {np.mean(bt.route_length):.1f}m")
+                     f"\nAvg Route Length (Clean):    {np.mean(ct.route_length):.1f}m"
+                     f"\nAvg Route Length (Blocked):  {np.mean(bt.route_length):.1f}m")
 
             self.finished_signal.emit(True, figs, report)
         except Exception as e:
@@ -171,26 +194,28 @@ class AdvancedVisApp(QMainWindow):
 
         controls = QHBoxLayout()
         self.base_in = QLineEdit("VeinsScenario")
-        self.path_in = QLineEdit(os.path.join(os.getcwd(), "VeinsScenario-logs"))
+        self.path_in = QLineEdit(os.getcwd())
+        
+        self.btn_browse = QPushButton("Select Parent Folder")
         self.btn = QPushButton("Run Analysis")
         self.btn_save = QPushButton("Export All PNGs")
         self.btn_save.setEnabled(False)
+        
+        self.btn_browse.clicked.connect(self.browse_folder)
         self.btn.clicked.connect(self.run_analysis)
         self.btn_save.clicked.connect(self.save_all)
         
-        controls.addWidget(QLabel("Base:")); controls.addWidget(self.base_in)
-        controls.addWidget(QLabel("Folder:")); controls.addWidget(self.path_in)
+        controls.addWidget(QLabel("Scenario Name:")); controls.addWidget(self.base_in)
+        controls.addWidget(self.btn_browse)
+        controls.addWidget(QLabel("Search Path:")); controls.addWidget(self.path_in)
         controls.addWidget(self.btn); controls.addWidget(self.btn_save)
         main_layout.addLayout(controls)
 
         self.tabs = QTabWidget()
         self.log_view = QTextEdit()
-        self.tab_congest = PlotViewer()
-        self.tab_dist = PlotViewer()
-        self.tab_scatter = PlotViewer()
-        self.tab_length = PlotViewer()
-        self.tab_bars = PlotViewer()
-        self.report_view = QTextEdit()
+        self.tab_congest = PlotViewer(); self.tab_dist = PlotViewer()
+        self.tab_scatter = PlotViewer(); self.tab_length = PlotViewer()
+        self.tab_bars = PlotViewer(); self.report_view = QTextEdit()
         self.report_view.setFontPointSize(11)
 
         self.tabs.addTab(self.log_view, "Status Log")
@@ -202,9 +227,21 @@ class AdvancedVisApp(QMainWindow):
         self.tabs.addTab(self.report_view, "6. Final Report")
         main_layout.addWidget(self.tabs)
 
+    def browse_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Parent Directory")
+        if path: self.path_in.setText(path)
+
     def run_analysis(self):
         self.log_view.clear()
-        self.worker = AnalysisWorker(self.base_in.text(), self.path_in.text())
+        scenario = self.base_in.text()
+        parent = self.path_in.text()
+        target_logs = os.path.join(parent, f"{scenario}-logs")
+        
+        if not os.path.exists(target_logs):
+            QMessageBox.warning(self, "Path Error", f"Folder not found:\n{target_logs}")
+            return
+
+        self.worker = AnalysisWorker(scenario, target_logs)
         self.worker.log_signal.connect(self.log_view.append)
         self.worker.finished_signal.connect(self.update_ui)
         self.worker.start()
@@ -219,14 +256,14 @@ class AdvancedVisApp(QMainWindow):
             self.tab_bars.set_plot(figs['bars'])
             self.report_view.setText(report)
             self.btn_save.setEnabled(True)
-            self.tabs.setCurrentIndex(2) # Switch to the new Distribution tab
+            self.tabs.setCurrentIndex(6)
 
     def save_all(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Folder to Save Charts")
         if dir_path:
             for name, fig in self.figs.items():
-                fig.savefig(os.path.join(dir_path, f"Research_{name}.png"), dpi=300, bbox_inches='tight')
-            QMessageBox.information(self, "Saved", "All charts exported successfully!")
+                fig.savefig(os.path.join(dir_path, f"Research_{name}.png"), dpi=300)
+            QMessageBox.information(self, "Saved", "All charts exported.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv); win = AdvancedVisApp(); win.show(); sys.exit(app.exec_())
